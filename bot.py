@@ -1,13 +1,14 @@
 import os
+import random
 import sqlite3
 import threading
 import time
-import random
 from datetime import datetime
+from functools import wraps
 from urllib.parse import quote
 
 import requests
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, jsonify, redirect, render_template_string, request, session, url_for
 
 # ------------------------------------------------------------
 # Config
@@ -25,12 +26,16 @@ DEFAULT_ASIN = os.environ.get("DEFAULT_ASIN", "B0D3H6XYZ1")
 APP_PORT = int(os.environ.get("PORT", "8080"))
 AUTO_POST_INTERVAL = int(os.environ.get("AUTO_POST_INTERVAL", str(60 * 60 * 4)))
 DB_PATH = os.environ.get("DATABASE_PATH", "data/affiliate_bot.db")
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
+SECRET_KEY = os.environ.get("SECRET_KEY", "change-me-please")
 
 app = Flask(__name__)
+app.secret_key = SECRET_KEY
 app.config["JSON_SORT_KEYS"] = False
 
 # ------------------------------------------------------------
-# Database
+# DB helpers
 # ------------------------------------------------------------
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
@@ -41,6 +46,7 @@ def get_db_connection():
 def init_db():
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
     conn = get_db_connection()
+
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS products (
@@ -61,6 +67,8 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             order_id TEXT NOT NULL UNIQUE,
             customer TEXT NOT NULL,
+            phone TEXT,
+            notes TEXT,
             asin TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'new',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -68,8 +76,17 @@ def init_db():
         """
     )
 
-    existing = conn.execute("SELECT COUNT(*) AS count FROM products").fetchone()["count"]
-    if existing == 0:
+    # Compatibility migration for older DBs
+    try:
+        conn.execute("SELECT phone FROM orders LIMIT 1")
+    except sqlite3.DatabaseError:
+        conn.execute("ALTER TABLE orders ADD COLUMN phone TEXT")
+    try:
+        conn.execute("SELECT notes FROM orders LIMIT 1")
+    except sqlite3.DatabaseError:
+        conn.execute("ALTER TABLE orders ADD COLUMN notes TEXT")
+
+    if conn.execute("SELECT COUNT(*) FROM products").fetchone()[0] == 0:
         sample_products = [
             (
                 "AirPods Pro 2",
@@ -111,6 +128,81 @@ def init_db():
 init_db()
 
 # ------------------------------------------------------------
+# Auth
+# ------------------------------------------------------------
+def admin_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if not session.get("admin_logged_in"):
+            return redirect(url_for("admin_login"))
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+# ------------------------------------------------------------
+# Product/order helpers
+# ------------------------------------------------------------
+def get_active_products():
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT * FROM products WHERE active = 1 ORDER BY id DESC"
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_all_products():
+    conn = get_db_connection()
+    rows = conn.execute("SELECT * FROM products ORDER BY id DESC").fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_all_orders():
+    conn = get_db_connection()
+    rows = conn.execute("SELECT * FROM orders ORDER BY id DESC LIMIT 200").fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_product_by_id(product_id):
+    conn = get_db_connection()
+    row = conn.execute("SELECT * FROM products WHERE id = ?", (product_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_product_by_asin(asin):
+    conn = get_db_connection()
+    row = conn.execute("SELECT * FROM products WHERE asin = ?", (asin,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def create_order_record(asin, customer, phone=None, notes=None, status="new"):
+    order_id = f"ORD{int(time.time())}"
+    conn = get_db_connection()
+    conn.execute(
+        """
+        INSERT INTO orders (order_id, customer, phone, notes, asin, status)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (order_id, customer, phone, notes, asin, status),
+    )
+    conn.commit()
+    conn.close()
+    return order_id
+
+
+def update_order_status(order_id, status):
+    conn = get_db_connection()
+    conn.execute("UPDATE orders SET status = ? WHERE order_id = ?", (status, order_id))
+    conn.commit()
+    conn.close()
+
+
+# ------------------------------------------------------------
 # Utility functions
 # ------------------------------------------------------------
 def amazon_links(asin):
@@ -133,8 +225,7 @@ def genius_short_url(asin):
         )
         response.raise_for_status()
         payload = response.json()
-        short_url = payload.get("shortUrl")
-        return short_url or amazon_url
+        return payload.get("shortUrl") or amazon_url
     except Exception:
         return amazon_url
 
@@ -211,41 +302,30 @@ def whatsapp_send_message(text):
         return False
 
 
-def get_active_products():
-    conn = get_db_connection()
-    rows = conn.execute(
-        "SELECT * FROM products WHERE active = 1 ORDER BY id DESC"
-    ).fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
-
-
-def create_order_record(asin, customer):
-    order_id = f"ORD{int(time.time())}"
-    conn = get_db_connection()
-    conn.execute(
-        "INSERT INTO orders (order_id, customer, asin, status) VALUES (?, ?, ?, 'new')",
-        (order_id, customer, asin),
+def send_order_whatsapp_alert(name, phone, product_name, asin, notes=None):
+    message = (
+        f"New customer order\n"
+        f"Name: {name}\n"
+        f"Phone: {phone}\n"
+        f"Product: {product_name}\n"
+        f"ASIN: {asin}\n"
     )
-    conn.commit()
-    conn.close()
-    return order_id
+    if notes:
+        message += f"Notes: {notes}\n"
+    message += f"WA: {WHATSAPP_NUMBER}"
+    return whatsapp_send_message(message)
 
 
 # ------------------------------------------------------------
-# Routes
+# Views: public endpoints
 # ------------------------------------------------------------
 @app.route("/")
 def home():
-    products = get_active_products()
-    conn = get_db_connection()
-    order_count = conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
-    conn.close()
     return {
         "status": "online",
         "whatsapp": WHATSAPP_NUMBER,
-        "products": len(products),
-        "orders": order_count,
+        "products": len(get_active_products()),
+        "orders": len(get_all_orders()),
         "time": datetime.now().isoformat(),
         "routes": [
             "/genius?asin=...",
@@ -254,7 +334,7 @@ def home():
             "/order?asin=...&cust=...",
             "/api/products",
             "/api/orders",
-            "/admin",
+            "/admin/login",
         ],
     }
 
@@ -268,10 +348,9 @@ def healthz():
 def genius():
     asin = request.args.get("asin", DEFAULT_ASIN)
     in_link, us_link = amazon_links(asin)
-    short_url = genius_short_url(asin)
     return {
         "asin": asin,
-        "geni_us": short_url,
+        "geni_us": genius_short_url(asin),
         "amazon_in": in_link,
         "amazon_us": us_link,
         "whatsapp": WHATSAPP_NUMBER,
@@ -281,7 +360,8 @@ def genius():
 @app.route("/wa-status")
 def wa_status():
     asin = request.args.get("asin", DEFAULT_ASIN)
-    product = next((p for p in get_active_products() if p["asin"] == asin), get_active_products()[0]) if get_active_products() else None
+    products = get_active_products()
+    product = next((p for p in products if p["asin"] == asin), products[0] if products else None)
     if not product:
         return {"error": "No active products found"}, 404
 
@@ -294,7 +374,8 @@ def wa_status():
 def tg_buyer():
     asin = request.args.get("asin", DEFAULT_ASIN)
     customer = request.args.get("cust", "Customer")
-    product = next((p for p in get_active_products() if p["asin"] == asin), get_active_products()[0]) if get_active_products() else None
+    products = get_active_products()
+    product = next((p for p in products if p["asin"] == asin), products[0] if products else None)
     if not product:
         return {"error": "No active products found"}, 404
 
@@ -308,106 +389,253 @@ def order():
     asin = request.args.get("asin", DEFAULT_ASIN)
     customer = request.args.get("cust", "Customer")
     order_id = create_order_record(asin, customer)
-    order_link = wa_message_link(f"Order {order_id} {asin} by {customer}")
+    whatsapp_link = wa_message_link(f"Order {order_id} {asin} by {customer}")
     return {
         "order_id": order_id,
         "customer": customer,
         "asin": asin,
-        "wa_link": order_link,
+        "wa_link": whatsapp_link,
     }
 
 
-@app.route("/admin")
-def admin_dashboard():
-    conn = get_db_connection()
-    products = conn.execute(
-        "SELECT * FROM products ORDER BY id DESC"
-    ).fetchall()
-    orders = conn.execute(
-        "SELECT * FROM orders ORDER BY id DESC LIMIT 50"
-    ).fetchall()
-    conn.close()
+@app.route("/api/order-intake", methods=["POST"])
+def api_order_intake():
+    data = request.form or request.get_json(silent=True) or {}
+    name = (data.get("name") or data.get("customer") or "Customer").strip()
+    phone = (data.get("phone") or "").strip()
+    asin = (data.get("asin") or DEFAULT_ASIN).strip()
+    notes = (data.get("notes") or "").strip()
 
-    html = """
-    <html>
-      <head>
-        <title>Affiliate Bot Admin</title>
-        <style>
-          body { font-family: Arial, sans-serif; margin: 30px; background: #f8f9fb; }
-          .card { background: white; border-radius: 12px; padding: 18px; margin-bottom: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
-          table { width: 100%; border-collapse: collapse; }
-          th, td { padding: 10px; border-bottom: 1px solid #eee; text-align: left; }
-          input, textarea, button { padding: 10px; margin: 6px 0; width: 100%; box-sizing: border-box; }
-          button { background: #1f6feb; color: white; border: none; border-radius: 8px; cursor: pointer; }
-          .row { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-        </style>
-      </head>
-      <body>
-        <h1>Affiliate Bot Admin</h1>
-        <div class="row">
-          <div class="card">
-            <h2>Add Product</h2>
-            <form action="/api/products" method="post">
-              <input name="title" placeholder="Title" required>
-              <input name="price" placeholder="Price" required>
-              <input name="asin" placeholder="ASIN" required>
-              <input name="image_url" placeholder="Image URL">
-              <textarea name="description" placeholder="Description"></textarea>
-              <button type="submit">Save Product</button>
+    product = get_product_by_asin(asin)
+    if not product:
+        return {"error": "ASIN not found"}, 404
+
+    order_id = create_order_record(asin, name, phone=phone, notes=notes)
+    send_order_whatsapp_alert(name, phone or "Not provided", product["title"], asin, notes)
+    return {
+        "status": "created",
+        "order_id": order_id,
+        "product": product["title"],
+        "customer": name,
+        "phone": phone,
+    }, 201
+
+
+# ------------------------------------------------------------
+# Admin login + dashboard
+# ------------------------------------------------------------
+@app.route("/admin/login", methods=["GET", "POST"])
+def admin_login():
+    if request.method == "POST":
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
+        if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+            session["admin_logged_in"] = True
+            return redirect(url_for("admin_dashboard"))
+        return render_template_string(
+            """
+            <html><body style='font-family: Arial; padding: 40px;'>
+            <h2>Admin Login</h2>
+            <form method='POST'>
+              <p><input name='username' placeholder='Username' required></p>
+              <p><input name='password' type='password' placeholder='Password' required></p>
+              <p><button type='submit'>Login</button></p>
             </form>
-          </div>
-          <div class="card">
-            <h2>Quick Actions</h2>
-            <p><a href="/genius?asin=B0D3H6XYZ1">Test Genius Link</a></p>
-            <p><a href="/order?asin=B0D3H6XYZ1&cust=Admin">Create Test Order</a></p>
-            <p><a href="/api/orders">View Orders JSON</a></p>
-            <p><a href="/api/products">View Products JSON</a></p>
-          </div>
-        </div>
+            <p style='color: red;'>Invalid username or password.</p>
+            </body></html>
+            """
+        )
 
-        <div class="card">
-          <h2>Products</h2>
-          <table>
-            <thead>
-              <tr><th>ID</th><th>Title</th><th>Price</th><th>ASIN</th><th>Active</th></tr>
-            </thead>
-            <tbody>
-              {% for product in products %}
-              <tr>
-                <td>{{ product['id'] }}</td>
-                <td>{{ product['title'] }}</td>
-                <td>{{ product['price'] }}</td>
-                <td>{{ product['asin'] }}</td>
-                <td>{{ product['active'] }}</td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
+    return render_template_string(
+        """
+        <html><body style='font-family: Arial; padding: 40px;'>
+        <h2>Admin Login</h2>
+        <form method='POST'>
+          <p><input name='username' placeholder='Username' required></p>
+          <p><input name='password' type='password' placeholder='Password' required></p>
+          <p><button type='submit'>Login</button></p>
+        </form>
+        </body></html>
+        """
+    )
 
-        <div class="card">
-          <h2>Orders</h2>
-          <table>
-            <thead>
-              <tr><th>ID</th><th>Order ID</th><th>Customer</th><th>ASIN</th><th>Status</th></tr>
-            </thead>
-            <tbody>
-              {% for order in orders %}
-              <tr>
-                <td>{{ order['id'] }}</td>
-                <td>{{ order['order_id'] }}</td>
-                <td>{{ order['customer'] }}</td>
-                <td>{{ order['asin'] }}</td>
-                <td>{{ order['status'] }}</td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      </body>
-    </html>
-    """
-    return render_template_string(html, products=products, orders=orders)
+
+@app.route("/admin/logout")
+def admin_logout():
+    session.pop("admin_logged_in", None)
+    return redirect(url_for("admin_login"))
+
+
+@app.route("/admin")
+@admin_required
+def admin_dashboard():
+    products = get_all_products()
+    orders = get_all_orders()
+    return render_template_string(
+        """
+        <html>
+          <head>
+            <title>Affiliate Bot Admin</title>
+            <style>
+              body { font-family: Arial, sans-serif; margin: 24px; background: #f5f7fb; }
+              .card { background: white; border-radius: 12px; padding: 18px; margin-bottom: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
+              .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+              table { width: 100%; border-collapse: collapse; }
+              th, td { padding: 10px; text-align: left; border-bottom: 1px solid #eee; }
+              input, textarea, button, select { width: 100%; padding: 9px; margin: 5px 0; box-sizing: border-box; }
+              button { border: none; border-radius: 8px; background: #1f6feb; color: white; cursor: pointer; }
+              .small-btn { background: #12a454; }
+              .danger { background: #d93025; }
+              .link { display: inline-block; margin: 8px 12px 8px 0; }
+              a { color: #1f6feb; text-decoration: none; }
+            </style>
+          </head>
+          <body>
+            <h1>Affiliate Bot Admin</h1>
+            <p><a href="/admin/logout">Logout</a></p>
+
+            <div class="grid">
+              <div class="card">
+                <h2>Add Product</h2>
+                <form method="POST" action="/api/products">
+                  <input name="title" placeholder="Title" required>
+                  <input name="price" placeholder="Price" required>
+                  <input name="asin" placeholder="ASIN" required>
+                  <input name="image_url" placeholder="Image URL">
+                  <textarea name="description" placeholder="Description"></textarea>
+                  <button type="submit">Save Product</button>
+                </form>
+              </div>
+
+              <div class="card">
+                <h2>Quick Actions</h2>
+                <p><a href="/genius?asin=B0D3H6XYZ1">Test Genius Link</a></p>
+                <p><a href="/order?asin=B0D3H6XYZ1&cust=Admin">Create Test Order</a></p>
+                <p><a href="/api/orders">View Orders JSON</a></p>
+                <p><a href="/api/products">View Products JSON</a></p>
+              </div>
+            </div>
+
+            <div class="card">
+              <h2>Products</h2>
+              <table>
+                <tr><th>ID</th><th>Title</th><th>Price</th><th>ASIN</th><th>Status</th><th>Actions</th></tr>
+                {% for product in products %}
+                <tr>
+                  <td>{{ product['id'] }}</td>
+                  <td>{{ product['title'] }}</td>
+                  <td>{{ product['price'] }}</td>
+                  <td>{{ product['asin'] }}</td>
+                  <td>{{ 'Active' if product['active'] else 'Inactive' }}</td>
+                  <td>
+                    <a href="/admin/products/{{ product['id'] }}/edit">Edit</a> |
+                    <form style="display:inline" method="POST" action="/admin/products/{{ product['id'] }}/toggle">
+                      <button class="small-btn" type="submit">{{ 'Disable' if product['active'] else 'Enable' }}</button>
+                    </form>
+                    |
+                    <form style="display:inline" method="POST" action="/admin/products/{{ product['id'] }}/delete" onsubmit="return confirm('Delete this product?');">
+                      <button class="danger" type="submit">Delete</button>
+                    </form>
+                  </td>
+                </tr>
+                {% endfor %}
+              </table>
+            </div>
+
+            <div class="card">
+              <h2>Orders</h2>
+              <table>
+                <tr><th>ID</th><th>Order ID</th><th>Customer</th><th>Phone</th><th>ASIN</th><th>Status</th></tr>
+                {% for order in orders %}
+                <tr>
+                  <td>{{ order['id'] }}</td>
+                  <td>{{ order['order_id'] }}</td>
+                  <td>{{ order['customer'] }}</td>
+                  <td>{{ order['phone'] or '—' }}</td>
+                  <td>{{ order['asin'] }}</td>
+                  <td>{{ order['status'] }}</td>
+                </tr>
+                {% endfor %}
+              </table>
+            </div>
+          </body>
+        </html>
+        """,
+        products=products,
+        orders=orders,
+    )
+
+
+@app.route("/admin/products/<int:product_id>/edit", methods=["GET", "POST"])
+@admin_required
+def edit_product(product_id):
+    product = get_product_by_id(product_id)
+    if not product:
+        return "Product not found", 404
+
+    if request.method == "POST":
+        title = request.form.get("title", product["title"]).strip()
+        price = request.form.get("price", product["price"]).strip()
+        asin = request.form.get("asin", product["asin"]).strip()
+        image_url = request.form.get("image_url", product.get("image_url") or "").strip()
+        description = request.form.get("description", product.get("description") or "").strip()
+        active = 1 if request.form.get("active") == "on" else 0
+
+        conn = get_db_connection()
+        conn.execute(
+            """
+            UPDATE products
+            SET title = ?, price = ?, asin = ?, image_url = ?, description = ?, active = ?
+            WHERE id = ?
+            """,
+            (title, price, asin, image_url, description, active, product_id),
+        )
+        conn.commit()
+        conn.close()
+        return redirect(url_for("admin_dashboard"))
+
+    return render_template_string(
+        """
+        <html><body style='font-family: Arial; padding: 30px;'>
+        <h2>Edit Product</h2>
+        <form method='POST'>
+          <p><input name='title' value='{{ product["title"] }}' required></p>
+          <p><input name='price' value='{{ product["price"] }}' required></p>
+          <p><input name='asin' value='{{ product["asin"] }}' required></p>
+          <p><input name='image_url' value='{{ product.get("image_url") or "" }}'></p>
+          <p><textarea name='description'>{{ product.get("description") or "" }}</textarea></p>
+          <p><label><input type='checkbox' name='active' {% if product['active'] %}checked{% endif %}> Active</label></p>
+          <p><button type='submit'>Save Changes</button></p>
+        </form>
+        <p><a href='/admin'>Back to dashboard</a></p>
+        </body></html>
+        """,
+        product=product,
+    )
+
+
+@app.route("/admin/products/<int:product_id>/delete", methods=["POST"])
+@admin_required
+def delete_product(product_id):
+    conn = get_db_connection()
+    conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/products/<int:product_id>/toggle", methods=["POST"])
+@admin_required
+def toggle_product(product_id):
+    product = get_product_by_id(product_id)
+    if not product:
+        return "Product not found", 404
+
+    conn = get_db_connection()
+    conn.execute("UPDATE products SET active = ? WHERE id = ?", (0 if product["active"] else 1, product_id))
+    conn.commit()
+    conn.close()
+    return redirect(url_for("admin_dashboard"))
 
 
 # ------------------------------------------------------------
@@ -416,8 +644,7 @@ def admin_dashboard():
 @app.route("/api/products", methods=["GET", "POST"])
 def api_products():
     if request.method == "GET":
-        products = get_active_products()
-        return jsonify(products)
+        return jsonify(get_all_products())
 
     data = request.form or request.get_json(silent=True) or {}
     title = (data.get("title") or "").strip()
@@ -448,18 +675,56 @@ def api_products():
     return {"status": "created", "id": product_id}, 201
 
 
+@app.route("/api/products/<int:product_id>", methods=["GET", "PUT", "DELETE"])
+def api_product_detail(product_id):
+    product = get_product_by_id(product_id)
+    if not product:
+        return {"error": "Product not found"}, 404
+
+    if request.method == "GET":
+        return jsonify(product)
+
+    if request.method == "PUT":
+        data = request.form or request.get_json(silent=True) or {}
+        title = (data.get("title") or product["title"]).strip()
+        price = (data.get("price") or product["price"]).strip()
+        asin = (data.get("asin") or product["asin"]).strip()
+        image_url = (data.get("image_url") or product.get("image_url") or "").strip()
+        description = (data.get("description") or product.get("description") or "").strip()
+        active = int(data.get("active", product["active"]))
+
+        conn = get_db_connection()
+        conn.execute(
+            """
+            UPDATE products
+            SET title = ?, price = ?, asin = ?, image_url = ?, description = ?, active = ?
+            WHERE id = ?
+            """,
+            (title, price, asin, image_url, description, active, product_id),
+        )
+        conn.commit()
+        conn.close()
+        return {"status": "updated", "id": product_id}
+
+    if request.method == "DELETE":
+        conn = get_db_connection()
+        conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
+        conn.commit()
+        conn.close()
+        return {"status": "deleted", "id": product_id}
+
+
 @app.route("/api/orders", methods=["GET", "POST"])
 def api_orders():
     if request.method == "GET":
-        conn = get_db_connection()
-        rows = conn.execute("SELECT * FROM orders ORDER BY id DESC").fetchall()
-        conn.close()
-        return jsonify([dict(row) for row in rows])
+        return jsonify(get_all_orders())
 
     data = request.form or request.get_json(silent=True) or {}
     asin = (data.get("asin") or DEFAULT_ASIN).strip()
     customer = (data.get("customer") or data.get("cust") or "Customer").strip()
-    order_id = create_order_record(asin, customer)
+    phone = (data.get("phone") or "").strip()
+    notes = (data.get("notes") or "").strip()
+    order_id = create_order_record(asin, customer, phone=phone, notes=notes)
     return {"status": "created", "order_id": order_id}, 201
 
 
@@ -485,7 +750,6 @@ def auto_post_loop():
                     f"WA Order {WHATSAPP_NUMBER} {wa_link} "
                     f"As Amazon Associate I earn WA {WHATSAPP_NUMBER}"
                 )
-
                 telegram_send_photo(product.get("image_url") or "", caption)
                 facebook_post_photo(product.get("image_url") or "", caption)
                 whatsapp_send_message(caption[:500])
@@ -502,97 +766,6 @@ threading.Thread(target=auto_post_loop, daemon=True).start()
 # ------------------------------------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=APP_PORT, debug=False)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
