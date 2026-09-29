@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Login</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: linear-gradient(135deg, #eef4ff, #f8fafc);
+      display: grid;
+      place-items: center;
+      height: 100vh;
+    }
+    .login-box {
+      width: min(92vw, 420px);
+      background: white;
+      border-radius: 18px;
+      padding: 30px 24px;
+      box-shadow: 0 24px 60px rgba(15, 23, 42, 0.12);
+    }
+    h2 { margin-top: 0; }
+    input, button {
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid #dfe7f3;
+      margin: 10px 0;
+      font-size: 15px;
+      box-sizing: border-box;
+    }
+    button {
+      background: #1f6feb;
+      color: white;
+      border: none;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .error { color: #d93025; margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+  <div class="login-box">
+    <h2>Admin Login</h2>
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    <form method="POST">
+      <input name="username" value="{{ username }}" placeholder="Username" required />
+      <input name="password" type="password" placeholder="Password" required />
+      <button type="submit">Login</button>
+    </form>
+  </div>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

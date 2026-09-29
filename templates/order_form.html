@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Edit Product</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f4f7fb;
+      margin: 0;
+      padding: 32px;
+    }
+    .card {
+      background: white;
+      max-width: 700px;
+      margin: 0 auto;
+      border-radius: 18px;
+      padding: 28px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+    }
+    input, textarea, button {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 11px 12px;
+      border-radius: 10px;
+      border: 1px solid #dfe7f3;
+      margin: 8px 0;
+      font-size: 14px;
+    }
+    button {
+      background: #1f6feb;
+      border: none;
+      color: white;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    a { color: #1f6feb; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Edit Product</h2>
+    <form method="POST" enctype="multipart/form-data">
+      <input name="title" value="{{ product.title }}" required>
+      <input name="price" value="{{ product.price }}" required>
+      <input name="asin" value="{{ product.asin }}" required>
+      <input name="image_url" value="{{ product.image_url or '' }}" placeholder="Remote image URL">
+      <input type="file" name="image_file" accept="image/*">
+      <textarea name="description" placeholder="Description">{{ product.description or '' }}</textarea>
+      <label><input type="checkbox" name="active" {% if product.active %}checked{% endif %}> Active</label>
+      <button type="submit">Save Changes</button>
+    </form>
+    <p><a href="/admin">Back to dashboard</a></p>
+  </div>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

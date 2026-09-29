@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Affiliate Bot Admin</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --card: #ffffff;
+      --text: #1b2430;
+      --muted: #6b7280;
+      --primary: #1f6feb;
+      --success: #1c8c5c;
+      --warning: #d97706;
+      --danger: #d93025;
+      --border: #e5e7eb;
+      --shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, Helvetica, sans-serif;
+    }
+    .container {
+      max-width: 1320px;
+      margin: 32px auto;
+      padding: 0 18px 48px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 24px;
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 36px;
+    }
+    .header a {
+      color: var(--primary);
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(180px, 1fr));
+      gap: 18px;
+      margin-bottom: 24px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      padding: 20px;
+    }
+    .metric {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .metric-label {
+      color: var(--muted);
+      font-size: 13px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .metric-value {
+      font-size: 28px;
+      font-weight: 700;
+    }
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin-bottom: 24px;
+    }
+    .form-group {
+      margin-bottom: 14px;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    input, textarea, select, button {
+      width: 100%;
+      padding: 11px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      font-size: 14px;
+      outline: none;
+    }
+    input:focus, textarea:focus, select:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(31,111,235,0.12);
+    }
+    textarea {
+      min-height: 90px;
+      resize: vertical;
+    }
+    button {
+      background: var(--primary);
+      color: white;
+      border: none;
+      cursor: pointer;
+      font-weight: 700;
+      transition: transform 0.15s ease;
+    }
+    button:hover { transform: translateY(-1px); }
+    .small-btn {
+      background: var(--success);
+      width: auto;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      margin-right: 6px;
+    }
+    .danger-btn {
+      background: var(--danger);
+      width: auto;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+    }
+    th, td {
+      padding: 12px 10px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      vertical-align: middle;
+    }
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      background: rgba(148, 163, 184, 0.04);
+    }
+    img.product-thumb {
+      width: 52px;
+      height: 52px;
+      object-fit: cover;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+    }
+    .status-pill {
+      display: inline-block;
+      font-size: 12px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(31,111,235,0.08);
+      color: var(--primary);
+      font-weight: 700;
+      text-transform: capitalize;
+    }
+    .link-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 20px;
+    }
+    .link-row a {
+      display: inline-block;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      text-decoration: none;
+      color: var(--text);
+      background: white;
+    }
+    @media (max-width: 920px) {
+      .stats, .main-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Affiliate Bot Admin</h1>
+      <a href="/admin/logout">Logout</a>
+    </div>
+
+    <div class="stats">
+      <div class="card metric">
+        <span class="metric-label">Total Products</span>
+        <span class="metric-value">{{ stats.total_products }}</span>
+      </div>
+      <div class="card metric">
+        <span class="metric-label">Active Products</span>
+        <span class="metric-value">{{ stats.active_products }}</span>
+      </div>
+      <div class="card metric">
+        <span class="metric-label">Total Orders</span>
+        <span class="metric-value">{{ stats.total_orders }}</span>
+      </div>
+      <div class="card metric">
+        <span class="metric-label">New Orders</span>
+        <span class="metric-value">{{ stats.new_orders }}</span>
+      </div>
+    </div>
+
+    <div class="main-grid">
+      <div class="card">
+        <h2>Add Product</h2>
+        <form method="POST" action="/admin/products/new" enctype="multipart/form-data">
+          <div class="form-group">
+            <label>Title</label>
+            <input name="title" placeholder="Ex: Noise Buds" required>
+          </div>
+          <div class="form-group">
+            <label>Price</label>
+            <input name="price" placeholder="Ex: $99" required>
+          </div>
+          <div class="form-group">
+            <label>ASIN</label>
+            <input name="asin" placeholder="Ex: B0D3H6XYZ1" required>
+          </div>
+          <div class="form-group">
+            <label>Image URL</label>
+            <input name="image_url" placeholder="Optional remote image URL">
+          </div>
+          <div class="form-group">
+            <label>Upload Image</label>
+            <input type="file" name="image_file" accept="image/*">
+          </div>
+          <div class="form-group">
+            <label>Description</label>
+            <textarea name="description" placeholder="Optional description"></textarea>
+          </div>
+          <button type="submit">Save Product</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Quick Actions</h2>
+        <div class="link-row">
+          <a href="/genius?asin=B0D3H6XYZ1">Test Genius Link</a>
+          <a href="/order?asin=B0D3H6XYZ1&cust=Admin">Create Test Order</a>
+          <a href="/customer-form">Customer Intake Form</a>
+          <a href="/api/orders">Orders JSON</a>
+          <a href="/api/products">Products JSON</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Products</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Image</th>
+            <th>Title</th>
+            <th>Price</th>
+            <th>ASIN</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for product in products %}
+          <tr>
+            <td><img class="product-thumb" src="{{ product_image_url(product) }}" alt="{{ product.title }}"></td>
+            <td>{{ product.title }}</td>
+            <td>{{ product.price }}</td>
+            <td>{{ product.asin }}</td>
+            <td><span class="status-pill">{{ 'Active' if product.active else 'Inactive' }}</span></td>
+            <td>
+              <a href="/admin/products/{{ product.id }}/edit"><button class="small-btn" type="button">Edit</button></a>
+              <form method="POST" action="/admin/products/{{ product.id }}/toggle" style="display:inline;">
+                <button class="small-btn" type="submit">{{ 'Disable' if product.active else 'Enable' }}</button>
+              </form>
+              <form method="POST" action="/admin/products/{{ product.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete this product?');">
+                <button class="danger-btn" type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top: 24px;">
+      <h2>Orders</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Order ID</th>
+            <th>Customer</th>
+            <th>Phone</th>
+            <th>ASIN</th>
+            <th>Status</th>
+            <th>Update</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for order in orders %}
+          <tr>
+            <td>{{ order.order_id }}</td>
+            <td>{{ order.customer }}</td>
+            <td>{{ order.phone or '—' }}</td>
+            <td>{{ order.asin }}</td>
+            <td><span class="status-pill">{{ order.status }}</span></td>
+            <td>
+              <form method="POST" action="/admin/orders/{{ order.order_id }}/status">
+                <select name="status">
+                  {% for value in status_choices %}
+                  <option value="{{ value }}" {% if value == order.status %}selected{% endif %}>{{ value }}</option>
+                  {% endfor %}
+                </select>
+                <button type="submit" class="small-btn" style="margin-top: 8px;">Update</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
